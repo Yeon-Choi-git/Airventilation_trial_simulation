@@ -1,3 +1,4 @@
+rm (list(ls(all.names = TRUE)))
 #### Idea: Simulate data accoridng to random-ic logistic model
 ####  - Include variability in simulation parameters but assume independence
 ###   - Vary the start of the exposure (or randomization) per school
@@ -7,6 +8,7 @@
 ###
 ###   - 20230519JC: time between the start of the trial & installation date -> considered as a non-exposed period?
 
+source('airvent_package_functions.R')
 
 #########################################
 ###         Create a dataset          ###
@@ -17,8 +19,8 @@ fu_end = as.Date('2024/07/31')
 period <-  c('aug', 'sep', 'oct', 'nov', 'dec', 'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul')
 
 ### installation period
-installation_start = as.Date('2023/08/01')# air vent installation period starts
-installation_end = as.Date('2023/12/31')  # air vent installation period ends
+installation_start = as.Date('2023/08/01')
+installation_end = as.Date('2023/12/31')  
 
 
 ### Defining start & end date of each month
@@ -31,9 +33,10 @@ date_start_month <- lubridate::floor_date(
 
 
 ### sample size
-nschool <- 20
+nschool <- 100
 nclass_perschool <- runif(nschool, min = 5, max = 10) %>% round(0) #average?
 nclass <- sum(nclass_perschool)
+nstudent_perclass <- rpois(nclass, lambda = 24) #average 23-24 per class
 #hist(nclass_perschool * nstudent_percalss)
 
 
@@ -52,13 +55,14 @@ startexp_dat <- data.table(school.id = 1:as.integer(nschool/2)) %>%
     ) 
 
 ### Create a complete dataset
+### TODO: This step is slow. 
 dat <- data.table(
   school.id = rep(1:nschool, times = nclass_perschool),
   class.id = expand_class_id (nclass_perschool),
   nstudent_perclass
 ) %>% 
   left_join(startexp_dat, by = "school.id") %>% 
-  slice(rep(1:n(), each = length(months))) %>%
+  slice(rep(1:n(), each = length(period))) %>%
   mutate(
     period = rep(period, times = nclass),
     date_end_month = rep(date_end_month, times = nclass),
@@ -74,23 +78,32 @@ dat <- data.table(
 #View(dat)
   
 
-
-
 #########################################
 ###     Create a infection model      ###
 #########################################
 ### pr(sick absence) is generate with a random intercept model
-### Yij = b0ij + b1ij*treatment + b2ij*period
+### log(pij/1-pij) = b0ij + b1ij*treatment + b2ij*period
 ### b0 = r0 + u0j
 
-var_school <- rep(rnorm(nschool, 0, 0.025), nclass_perschool) #school level: u0j
-b0 <- 0.5 + var_school
-b1 <- 2 #treatment effect (OR)
-  
-#periodic probability of getting infected
-b2_dat <- data.frame(
-  period = months, 
-  pi = c(
+
+r0 <- -2.5
+u0j <- 0.05
+b1 <- log(2) #treatment effect (OR = 2)
+
+b0_dat <- data.frame(
+  school.id = 1:nschool,
+  random_ic = rnorm(nschool, r0, u0j)
+)
+
+### baseline pr(infected for each school) = ~ 0.078 
+### TODO: how to define?
+#hist(1 / (1 + exp(-b0_dat$random_ic)))
+
+### periodic probability of getting infected
+### TODO: how to define?
+b1_dat <- data.frame(
+  period = period, 
+  period_pi = c(
     0.025, #aug
     0.05,  #sep
     0.10,  #oct
@@ -98,50 +111,42 @@ b2_dat <- data.frame(
     0.20,  #dec
     0.15,  #jan
     0.10,  #feb
-    0.05   #mar
+    0.10,  #mar
+    0.05,  #apr
+    0.05,  #may
+    0.025,  #jun
+    0.025  #jul
   )
 ) %>% 
-  mutate(logodds = log(pi/(1-pi)))
+  mutate(period_logodds = log(period_pi/(1-period_pi))) %>% 
+  select(-period_pi)
+
+dat_fin <- dat %>% 
+  left_join(b0_dat, by= "school.id") %>% 
+  left_join(b1_dat, by = "period")
 
 
-
-linpred <- b0  + b1*arm + var_class + b2_dat$logodds[b2_dat$period == dat_in_month$period]
+### A linear predictor for pr(infected)
+linpred <- dat_fin$random_ic + 2*dat_fin$arm + dat_fin$period_logodds
 prob <- 1 / (1 + exp(-linpred))
+#hist(prob)
+
+### Randomly select the number of sick days based on the linear predictor
+dat_fin$num_sickdays <- sapply(
+  1:nrow(dat_fin), FUN = function(i) rbinom(1, dat$num_weekdays_total[i], prob[i])) %>% 
+  round(0)
+#hist(dat_fin$num_sickdays)
+
+#########################################
+###     Data generation finished      ###
+#########################################
 
 
-
-var_school_dat <- data.frame(
-  school.id,
-  var_school = 
-)
-
-
-sim <- function(
-  nschool,
-  nclass,
-  lambda, #nstudent per class
-  riskratio
-  
-)
-  
-
-#add random variation 
-d2$logodd <- log(d2$pi/(1 - d2$pi)) * d2$multfact1 * d2$multfact2 
-d2$pi_fin <- exp(d2$logodd)/(1+exp(d2$logodd))
-#hist(exp(d2$logodd)/(1+exp(d2$logodd)))
-
-
-#generate the number of sick days per class
-d2$num.sickdays <- sapply(1:nrow(d2), FUN = function(i) rbinom(1, d2$num.days[i], d2$pi_fin[i]))
-#hist(d2$num.sickdays)
-
-
-modtmp <- glmer(num.sickdays ~ arm + (1|class.id) + (1|school.id) +  factor(period) + offset(log(num.days)),
-      data = d2,
-      family = poisson)
-summary(modtmp)
-
-
-coefficients(summary(modtmp))
-
-
+#########################################
+###            Model fit              ###
+#########################################
+m <- glmer(cbind(dat_fin$num_sickdays, dat_fin$num_weekdays_total - dat_fin$num_sickdays) ~ 
+             arm + period + (1|school.id) + (1|class.id), data = dat_fin, family = binomial)
+summary(m)
+fixef(m)
+exp(fixef(m))
