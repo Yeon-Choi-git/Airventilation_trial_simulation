@@ -1,4 +1,4 @@
-rm (list(ls(all.names = TRUE)))
+rm (list = ls(all.names = TRUE))
 #### Idea: Simulate data accoridng to random-ic logistic model
 ####  - Include variability in simulation parameters but assume independence
 ###   - Vary the start of the exposure (or randomization) per school
@@ -6,8 +6,18 @@ rm (list(ls(all.names = TRUE)))
 ###   - Model using glmer logistic (as in ?glmer example).
 ###
 ###
-###   - 20230519JC: time between the start of the trial & installation date -> considered as a non-exposed period?
+###   - JC 20230519: Date of installation could vary between schools. How do we handle this in a logitudianl clustered rct?
+###   -> a) time between the start of FU (momemnt of allocation) & installation date for the exposed group are classified as a non-exposed period
+###   -> b) discard non-exposed period of the exposed group (follow up starts from the moment of installation for the exposure group)
+###   -> c) ...?
+###
+###   - JC 20230522: stepwedge design
+###   -> Need a washout period?
+###   -> Installation regime? (eg., n school every month)
 
+if(!require("rstudioapi")) install.packages("rstudioapi")
+rstudioapi::getSourceEditorContext()$path
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
 source('airvent_package_functions.R')
 
 #########################################
@@ -46,6 +56,7 @@ nstudent_perclass <- rpois(nclass, lambda = 24) #average 23-24 per class
 startexp_dat <- data.table(school.id = 1:as.integer(nschool/2)) %>% 
   mutate(
     arm = 1,
+    # TODO: this should be elaborated (clustered vs. stepwedge?)
     exp_start = sample(seq(installation_start, installation_end, by = "months"), n(), replace = TRUE)
   ) %>% 
   bind_rows(
@@ -55,7 +66,7 @@ startexp_dat <- data.table(school.id = 1:as.integer(nschool/2)) %>%
     ) 
 
 ### Create a complete dataset
-### TODO: This step is slow. 
+### TODO: This step probably can be faster. 
 dat <- data.table(
   school.id = rep(1:nschool, times = nclass_perschool),
   class.id = expand_class_id (nclass_perschool),
